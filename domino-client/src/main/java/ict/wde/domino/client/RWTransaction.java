@@ -270,7 +270,7 @@ public class RWTransaction implements Transaction {
   }
 
   public void put(Put put, byte[] table) throws IOException {
-    put(put, getTable(table));
+    putStateful(put, getTable(table));
   }
 
   public void put(Put put, HTableInterface table) throws IOException {
