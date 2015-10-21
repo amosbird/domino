@@ -21,6 +21,7 @@ package ict.wde.domino.common;
 import java.io.IOException;
 
 import org.apache.hadoop.hbase.client.Get;
+import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.Result;
 
 /**
@@ -47,25 +48,23 @@ public interface HTableWrapper {
    */
   public Result get(Get get) throws IOException;
 
+
   /**
-   * To get a row using lockId.
-   * 
-   * @param get
-   * @param lockId
-   * @return
+   * Get the underlying HTable.
+   *
+   * @return HTableInterface
    * @throws IOException
    */
-  public Result get(Get get, Integer lockId) throws IOException;
+  public HTableInterface getTable();
 
   /**
    * To rollback a row.
    * 
    * @param row
    * @param startId
-   * @param lockId
    * @throws IOException
    */
-  public void rollbackRow(byte[] row, long startId, Integer lockId)
+  public void rollbackRow(byte[] row, long startId)
       throws IOException;
 
   /**
@@ -75,10 +74,9 @@ public interface HTableWrapper {
    * @param startId
    * @param commitId
    * @param isDelete
-   * @param lockId
    * @throws IOException
    */
   public void commitRow(byte[] row, long startId, long commitId,
-      boolean isDelete, Integer lockId) throws IOException;
+      boolean isDelete) throws IOException;
 
 }

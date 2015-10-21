@@ -117,14 +117,13 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
     List<KeyValue> status = preRead.getColumn(DominoConst.INNER_FAMILY,
         DominoConst.STATUS_COL);
     if (status == null || status.size() == 0) {
-      Result ret = MVCC.handleResult(this, getTrxMetaTable(), preRead, startId,
-          null);
+      Result ret = MVCC.handleResult(
+          this, getTrxMetaTable(), preRead, startId);
       return new DResult(ret, null);
     }
-    Integer lockId = region.getLock(null, get.getRow(), true);
     try {
       Result r = MVCC.handleResult(this, getTrxMetaTable(),
-          region.get(get, lockId), startId, lockId);
+              region.get(get), startId);
       return new DResult(r, null);
     }
     catch (TransactionOutOfDateException oode) {
@@ -133,75 +132,33 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
     catch (InvalidRowStatusException e) {
       return new DResult(null, e.getMessage());
     }
-    finally {
-      region.releaseRowLock(lockId);
-    }
-  }
-
-  private void mutateRow(Mutation mut, Integer lockId) throws IOException {
-    @SuppressWarnings("unchecked")
-    Pair<Mutation, Integer> pair[] = new Pair[1];
-    mut.setWriteToWAL(true);
-    pair[0] = new Pair<Mutation, Integer>(mut, lockId);
-    region.batchMutate(pair);
   }
 
   @Override
   public DResult put(Put put, long startId, boolean locking) throws IOException {
-    Integer lockId = region.getLock(null, put.getRow(), true);
     try {
       byte[] columnsWritten = MVCC.writeCheckRowStatus(this, getTrxMetaTable(),
-          put.getRow(), locking, lockId, startId);
+          put.getRow(), locking, startId);
       Put innerPut = clonePut(put, startId, locking, columnsWritten);
-      mutateRow(innerPut, lockId);
+      region.put(innerPut);
       return null;
     }
     catch (InvalidRowStatusException e) {
       return new DResult(null, e.getMessage());
-    }
-    finally {
-      region.releaseRowLock(lockId);
     }
   }
 
   @Override
   public DResult delete(byte[] row, long startId) throws IOException {
-    Integer lockId = region.getLock(null, row, true);
     try {
       byte[] columnsWritten = MVCC.writeCheckRowStatus(this, getTrxMetaTable(),
-          row, false, lockId, startId);
+          row, false, startId);
       Put deletePut = deletePut(row, startId, columnsWritten);
-      mutateRow(deletePut, lockId);
+      region.put(deletePut);
       return null;
     }
     catch (InvalidRowStatusException e) {
       return new DResult(null, e.getMessage());
-    }
-    finally {
-      region.releaseRowLock(lockId);
-    }
-  }
-
-  @Override
-  public void rollbackRow(byte[] row, long startId) throws IOException {
-    Integer lockId = region.getLock(null, row, true);
-    try {
-      this.rollbackRow(row, startId, lockId);
-    }
-    finally {
-      region.releaseRowLock(lockId);
-    }
-  }
-
-  @Override
-  public void commitRow(byte[] row, long startId, long commitId,
-      boolean isDelete) throws IOException {
-    Integer lockId = region.getLock(null, row, true);
-    try {
-      commitRow(row, startId, commitId, isDelete, lockId);
-    }
-    finally {
-      region.releaseRowLock(lockId);
     }
   }
 
@@ -294,25 +251,19 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
     return meta;
   }
 
+  @Override
   public Result get(Get get) throws IOException {
-    throw new UnsupportedOperationException();
+    return region.get(get);
   }
 
-  @SuppressWarnings("deprecation")
-  @Override
-  public Result get(Get get, Integer lockId) throws IOException {
-    return region.get(get, lockId);
-  }
+  public HTableInterface getTable() { return null; }
 
-  @SuppressWarnings("deprecation")
-  @Override
-  public void rollbackRow(byte[] row, long startId, Integer lockId)
-      throws IOException {
+  public void rollbackRow(byte[] row, long startId) throws IOException {
     byte[] family = DominoConst.INNER_FAMILY;
     Get get = new Get(row);
     get.setTimeStamp(startId);
     get.addFamily(family);
-    Result r = region.get(get, lockId);
+    Result r = region.get(get);
     if (r == null || r.isEmpty()) return;
     byte[] colBytes = r.getValue(family, DominoConst.COLUMNS_COL);
     if (colBytes == null || colBytes.length == 0) return;
@@ -323,17 +274,15 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
     }
     del.deleteColumn(family, DominoConst.COLUMNS_COL, startId);
     del.deleteColumn(family, DominoConst.STATUS_COL, startId);
-    mutateRow(del, lockId);
+    region.delete(del, false);
   }
 
-  @SuppressWarnings("deprecation")
-  @Override
-  public void commitRow(byte[] row, long startId, long commitId,
-      boolean isDelete, Integer lockId) throws IOException {
+  public void commitRow(
+      byte[] row, long startId, long commitId, boolean isDelete) throws IOException {
     Get get = new Get(row);
     get.setMaxVersions();
     get.addFamily(DominoConst.INNER_FAMILY);
-    Result r = region.get(get, lockId);
+    Result r = region.get(get);
     if (!containsStatus(r, startId)) {
       // Other transaction may have committed this row of this version
       LOG.info("Commit: No status found, returning: {}.{}",
@@ -343,14 +292,13 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
     List<KeyValue> versions = r.getColumn(DominoConst.INNER_FAMILY,
         DominoConst.VERSION_COL);
     Put commit = new Put(row);
-    commit.setWriteToWAL(true);
     boolean isFresh = true;
     if (versions.size() >= DominoConst.MAX_VERSION) {
       // We need to clean the earliest version.
       LOG.info("Commit: rolling version window: {}.{}",
           new String(this.getName()), new String(row));
       isFresh = addClearColumns(commit, versions, r, row, isDelete, commitId,
-          startId, lockId);
+          startId);
     }
     KeyValue clearStatusKV = new KeyValue(row, DominoConst.INNER_FAMILY,
         DominoConst.STATUS_COL, startId, KeyValue.Type.Delete);
@@ -361,8 +309,7 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
           DominoConst.VERSION_COL, commitId, value);
       commit.add(commitKV);
     }
-    // commitNumericModifications(row, startId, lockId, commit);
-    mutateRow(commit, lockId);
+    region.put(commit);
   }
 
   private static boolean containsStatus(Result r, long startId) {
@@ -387,14 +334,12 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
    * @param isDelete
    * @param commitId
    * @param startId
-   * @param lockId
    * @return
    * @throws IOException
    */
   @SuppressWarnings("deprecation")
   private boolean addClearColumns(Put commit, List<KeyValue> versions,
-      Result r, byte[] row, boolean isDelete, long commitId, long startId,
-      Integer lockId) throws IOException {
+      Result r, byte[] row, boolean isDelete, long commitId, long startId) throws IOException {
     KeyValue commitKV = new KeyValue(row, DominoConst.INNER_FAMILY,
         DominoConst.VERSION_COL, commitId, DominoConst.versionValue(startId,
             isDelete));
@@ -420,7 +365,7 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
       Columns prevCols = new Columns(DominoConst.getColumnsAt(r, prevStartId));
       Get get = new Get(row);
       get.setTimeStamp(removeStartId);
-      Result res = region.get(get, lockId);
+      Result res = region.get(get);
       for (Column col : removeCols.cols) {
         if (prevCols.contains(col.family, col.qualifier)) {
           continue; // a newer value

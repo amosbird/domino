@@ -70,34 +70,31 @@ public class MVCC {
    *          Result to be handled
    * @param startId
    *          Transaction start id
-   * @param lockId
-   *          Row lock id, NULL on the client side.
    * @return The handled result
    * @throws IOException
    * @throws TransactionOutOfDateException
    * @throws InvalidRowStatusException
    */
   public static Result handleResult(HTableWrapper tableWrapper,
-      HTableInterface metaTable, Result result, long startId, Integer lockId)
-      throws IOException, TransactionOutOfDateException,
-      InvalidRowStatusException {
+      HTableInterface metaTable, Result result, long startId)
+      throws IOException {
     if (result.isEmpty()) return result;
     List<KeyValue> statusList = result.getColumn(DominoConst.INNER_FAMILY,
         DominoConst.STATUS_COL); // Returned is ArrayList
     List<KeyValue> versionList = result.getColumn(DominoConst.INNER_FAMILY,
         DominoConst.VERSION_COL);
-    if (lockId == null && statusList != null && statusList.size() > 0) {
+    if (statusList != null && statusList.size() > 0) {
       // This is a client-side scan that encounters a status data.
       if (isSelfDelete(statusList.get(0), startId)) {
         return new Result();
       }
-      return tableWrapper.get(getQuery(result));
+      return tableWrapper.getTable().get(getQuery(result));
     }
     List<KeyValue> committedList;
     committedList = handleStatus(tableWrapper, metaTable, statusList,
-        result.getRow(), startId, lockId);
+        result.getRow(), startId);
     List<KeyValue> mergedList = mergeVersionedList(committedList, versionList);
-    List<KeyValue> retKV = new ArrayList<KeyValue>();
+    List<KeyValue> retKV = new ArrayList<>();
     if (isDeletedRow(statusList, mergedList, startId)) {
       return new Result();
     }
@@ -144,7 +141,7 @@ public class MVCC {
     }
     if (retKV.size() == 0) {
       checkIfTransactionOutOfDate(result.getRow(), tableWrapper, startId,
-          mergedList, lockId);
+          mergedList);
     }
     return new Result(retKV);
   }
@@ -159,7 +156,6 @@ public class MVCC {
    * @param row
    * @param locking
    *          If this is a stateful update.
-   * @param lockId
    * @param startId
    * @return The columns this thread wrote before. NULL if this thread didn't
    *         update this row.
@@ -169,8 +165,8 @@ public class MVCC {
    *           If this row is in a invalid status.
    */
   public static byte[] writeCheckRowStatus(HTableWrapper tableWrapper,
-      HTableInterface metaTable, byte[] row, boolean locking, Integer lockId,
-      long startId) throws IOException, InvalidRowStatusException {
+      HTableInterface metaTable, byte[] row, boolean locking,
+      long startId) throws IOException {
     Get get = new Get(row);
     get.addFamily(DominoConst.INNER_FAMILY);
     get.setMaxVersions();
@@ -178,7 +174,7 @@ public class MVCC {
     List<KeyValue> versions;
     byte[] columnsWritten = null;
     while (true) {
-      Result res = tableWrapper.get(get, lockId);
+      Result res = tableWrapper.get(get);
       if (res == null || res.isEmpty()) return null;
       List<KeyValue> status = res.getColumn(DominoConst.INNER_FAMILY,
           DominoConst.STATUS_COL);
@@ -195,7 +191,7 @@ public class MVCC {
         }
         // Try to clean some committed/aborted status.
         retried = true;
-        handleStatus(tableWrapper, metaTable, status, row, startId, lockId);
+        handleStatus(tableWrapper, metaTable, status, row, startId);
         continue;
       }
       if (locking && conflicted(status, startId)) {
@@ -205,7 +201,7 @@ public class MVCC {
               new String(tableWrapper.getName()), new String(row)));
         }
         retried = true;
-        handleStatus(tableWrapper, metaTable, status, row, startId, lockId);
+        handleStatus(tableWrapper, metaTable, status, row, startId);
         continue;
       }
       Iterator<KeyValue> it = status.iterator();
@@ -223,7 +219,7 @@ public class MVCC {
           throw e;
         }
         retried = true;
-        handleStatus(tableWrapper, metaTable, status, row, startId, lockId);
+        handleStatus(tableWrapper, metaTable, status, row, startId);
         continue;
       }
       break;
@@ -270,7 +266,7 @@ public class MVCC {
 
   private static void checkIfTransactionOutOfDate(byte[] row,
       HTableWrapper tableWrapper, long startId,
-      List<KeyValue> mergedVersionList, Integer lockId)
+      List<KeyValue> mergedVersionList)
       throws IOException {
     int verCount = DominoConst.MAX_VERSION < mergedVersionList.size() ? DominoConst.MAX_VERSION
         : mergedVersionList.size();
@@ -282,7 +278,7 @@ public class MVCC {
     Get allVer = new Get(row);
     allVer.addColumn(DominoConst.INNER_FAMILY, DominoConst.VERSION_COL);
     allVer.setMaxVersions();
-    Result res = tableWrapper.get(allVer, lockId);
+    Result res = tableWrapper.get(allVer);
     List<KeyValue> vers = res.getColumn(DominoConst.INNER_FAMILY,
         DominoConst.VERSION_COL);
     if (vers.size() >= DominoConst.MAX_VERSION
@@ -306,9 +302,10 @@ public class MVCC {
     return get;
   }
 
-  private static List<KeyValue> handleStatus(HTableWrapper tableWrapper,
-      HTableInterface metaTable, List<KeyValue> status, byte[] row,
-      long startId, Integer lockId) throws IOException {
+  private static List<KeyValue> handleStatus(
+      HTableWrapper tableWrapper, HTableInterface metaTable,
+      List<KeyValue> status, byte[] row, long startId) throws IOException {
+
     if (status == null || status.size() == 0) return null;
     NavigableSet<KeyValue> committed = new TreeSet<>(
         VERSION_KV_COMPARATOR);
@@ -330,13 +327,12 @@ public class MVCC {
         // Expire issues are done by TMetaEndpoint
         continue;
       case DominoConst.TRX_ABORTED:
-        rollbackRow(tableWrapper, row, transactionId, lockId);
+        rollbackRow(tableWrapper, row, transactionId);
         break;
       case DominoConst.TRX_COMMITTED:
         long commitId = DominoConst.commitId(tStatus);
         if (commitId > startId) continue; // Ignore the "future" value.
-        committed.add(commitRow(tableWrapper, kv, transactionId, commitId,
-            lockId));
+        committed.add(commitRow(tableWrapper, kv, transactionId, commitId));
         break;
       default:
         throw new InvalidRowStatusException("Invalid transaction status");
@@ -366,11 +362,11 @@ public class MVCC {
   }
 
   private static KeyValue commitRow(HTableWrapper tableWrapper,
-      KeyValue statusKV, long startId, long commitId, Integer lockId) {
+      KeyValue statusKV, long startId, long commitId) {
     byte[] row = statusKV.getRow();
     boolean isDelete = DominoConst.isDelete(statusKV.getValue());
     try {
-      tableWrapper.commitRow(row, startId, commitId, isDelete, lockId);
+      tableWrapper.commitRow(row, startId, commitId, isDelete);
     }
     catch (IOException ioe) {
     }
@@ -380,10 +376,10 @@ public class MVCC {
     return commitKV;
   }
 
-  private static void rollbackRow(HTableWrapper tableWrapper, byte[] row,
-      long id, Integer lockId) {
+  private static void rollbackRow(
+      HTableWrapper tableWrapper, byte[] row, long id) {
     try {
-      tableWrapper.rollbackRow(row, id, lockId);
+      tableWrapper.rollbackRow(row, id);
     }
     catch (IOException e) {
       // LOG.warn("Failed to rollback row.", e);
@@ -393,7 +389,7 @@ public class MVCC {
   private static List<KeyValue> mergeVersionedList(List<KeyValue> committed,
       List<KeyValue> version) {
     if (committed == null) return version;
-    List<KeyValue> ret = new ArrayList<KeyValue>(committed.size()
+    List<KeyValue> ret = new ArrayList<>(committed.size()
         + version.size());
     int i = 0, j = 0;
     while (i < committed.size() || j < version.size()) {

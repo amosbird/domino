@@ -41,9 +41,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Transaction Metadata Endpoint Implementation.
- * 
+ *
  * @author Zhen Zhao, ICT, CAS
- * 
+ *
  */
 public class TMetaEndpoint implements TMetaIface {
 
@@ -59,7 +59,6 @@ public class TMetaEndpoint implements TMetaIface {
   public void start(CoprocessorEnvironment env) throws IOException {
     LOG.info("-------------TrxMetaEndpoint starting, version:{} ------------",
         Version.VERSION);
-    // this.env = env;
     conf = env.getConfiguration();
     tidClient = DominoIdService.getClient(conf.get(DominoConst.ZK_PROP));
     this.region = ((RegionCoprocessorEnvironment) env).getRegion();
@@ -94,67 +93,48 @@ public class TMetaEndpoint implements TMetaIface {
     return commitId;
   }
 
-  @SuppressWarnings("deprecation")
   public void commitTransaction(byte[] startId, long commitId) throws IOException {
-    Integer lockId = region.getLock(null, startId, true);
     long startIdLong = DominoConst.getTidFromTMetaKey(startId);
-    try {
-      Put put = new Put(startId);
-      put.add(DominoConst.TRANSACTION_META_FAMILY,
-          DominoConst.TRANSACTION_STATUS, startIdLong,
-          DominoConst.TRX_COMMITTED_B);
-      put.add(DominoConst.TRANSACTION_META_FAMILY,
-          DominoConst.TRANSACTION_COMMIT_ID, startIdLong,
-          Bytes.toBytes(commitId));
-      region.put(put, lockId, true);
-    }
-    finally {
-      region.releaseRowLock(lockId);
-    }
+    Put put = new Put(startId);
+    put.add(DominoConst.TRANSACTION_META_FAMILY,
+        DominoConst.TRANSACTION_STATUS, startIdLong,
+        DominoConst.TRX_COMMITTED_B);
+    put.add(DominoConst.TRANSACTION_META_FAMILY,
+        DominoConst.TRANSACTION_COMMIT_ID, startIdLong,
+        Bytes.toBytes(commitId));
+    region.put(put, false);
   }
 
   @Override
   public void abortTransaction(byte[] startId) throws IOException {
-    Integer lockId = region.getLock(null, startId, true);
-    try {
-      abort(startId, lockId);
-    }
-    finally {
-      region.releaseRowLock(lockId);
-    }
+    abort(startId);
   }
 
   @SuppressWarnings("deprecation")
-  private void abort(byte[] startId, Integer lockId) throws IOException {
+  private void abort(byte[] startId) throws IOException {
     Put put = new Put(startId);
     long startIdLong = DominoConst.getTidFromTMetaKey(startId);
     put.add(DominoConst.TRANSACTION_META_FAMILY,
         DominoConst.TRANSACTION_STATUS, startIdLong, DominoConst.TRX_ABORTED_B);
-    region.put(put, lockId, true);
+    region.put(put, false);
   }
 
   @SuppressWarnings("deprecation")
   @Override
   public Result getTransactionStatus(long transactionId) throws IOException {
     byte[] row = DominoConst.long2TranscationRowKey(transactionId);
-    Integer lockId = region.getLock(null, row, true);
-    try {
-      Get get = new Get(row);
-      Result r = region.get(get, lockId);
-      if (System.currentTimeMillis() - DominoConst.getLastTouched(r) > DominoConst.TRX_EXPIRED) {
-        // If it's too long since the client last updated the transaction
-        // timestamp, the client may be no longer alive.
-        // So we have to mark the transaction as aborted and let the caller
-        // clear the row status.
-        abort(row, lockId);
-        return region.get(get, lockId);
-      }
-      else {
-        return r;
-      }
+    Get get = new Get(row);
+    Result r = region.get(get);
+    if (System.currentTimeMillis() - DominoConst.getLastTouched(r) > DominoConst.TRX_EXPIRED) {
+      // If it's too long since the client last updated the transaction
+      // timestamp, the client may be no longer alive.
+      // So we have to mark the transaction as aborted and let the caller
+      // clear the row status.
+      abort(row);
+      return region.get(get);
     }
-    finally {
-      region.releaseRowLock(lockId);
+    else {
+      return r;
     }
   }
 

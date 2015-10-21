@@ -71,7 +71,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
       while (true) {
         Result result = scanner.next();
         if (result == null || result.isEmpty()) return result;
-        result = MVCC.handleResult(this, metaTable, result, startId, null);
+        result = MVCC.handleResult(this, metaTable, result, startId);
         if (result.isEmpty()) continue;
         return result;
       }
@@ -100,8 +100,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
       int targLength = result.length;
       while (result != null && result.length > 0) {
         for (int i = 0; i < result.length; ++i) {
-          Result r = MVCC.handleResult(this, metaTable, result[i], startId,
-              null);
+          Result r = MVCC.handleResult(this, metaTable, result[i], startId);
           if (r == null || r.isEmpty()) {
             continue;
           }
@@ -149,7 +148,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
         try {
           trx.checkIfReadyToContinue();
           next = MVCC.handleResult(DResultScanner.this, metaTable, it.next(),
-              startId, null);
+              startId);
           if (next == null || next.isEmpty()) continue;
           break;
         }
@@ -194,21 +193,17 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
     return res.getResult();
   }
 
-  @Override
-  public Result get(Get get, Integer lockId) throws IOException {
-    // Used when MVCC is checking if the transaction is expired.
-    return table.get(get);
-  }
+  public HTableInterface getTable() {return table;}
 
   @Override
-  public void rollbackRow(byte[] row, long startId, Integer lockId)
+  public void rollbackRow(byte[] row, long startId)
       throws IOException {
     table.coprocessorProxy(DominoIface.class, row).rollbackRow(row, startId);
   }
 
   @Override
   public void commitRow(byte[] row, long startId, long commitId,
-      boolean isDelete, Integer lockId) throws IOException {
+      boolean isDelete) throws IOException {
     table.coprocessorProxy(DominoIface.class, row).commitRow(row, startId,
         commitId, isDelete);
   }
