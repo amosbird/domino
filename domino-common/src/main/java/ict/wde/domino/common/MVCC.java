@@ -83,7 +83,7 @@ public class MVCC {
         DominoConst.STATUS_COL); // Returned is ArrayList
     List<KeyValue> versionList = result.getColumn(DominoConst.INNER_FAMILY,
         DominoConst.VERSION_COL);
-    if (statusList != null && statusList.size() > 0) {
+    if (tableWrapper.getTable() != null && statusList != null && statusList.size() > 0) {
       // This is a client-side scan that encounters a status data.
       if (isSelfDelete(statusList.get(0), startId)) {
         return new Result();
@@ -108,10 +108,8 @@ public class MVCC {
       for (byte[] column : familyMap.keySet()) {
         NavigableMap<Long, byte[]> values = familyMap.get(column);
         if (isSelfWrite(values, startId)) {
-          retKV
-              .add(new KeyValue(result.getRow(), family, column,
-                  DominoConst.DEFAULT_DATA_VERSION, values.firstEntry()
-                      .getValue()));
+          retKV.add(new KeyValue(result.getRow(), family, column,
+              DominoConst.DEFAULT_DATA_VERSION, values.firstEntry().getValue()));
           continue;
         }
         boolean gotoNextColumn = (verCount == 0);

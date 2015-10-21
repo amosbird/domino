@@ -318,8 +318,8 @@ public class RWTransaction implements Transaction {
   public void commit() throws IOException {
     checkIfReadyToContinue();
     getCommitId();
-    commitPuts();
     commitTransaction();
+    commitPuts();
     removeTransactionStatus();
     closeAllTables();
     reporter.interrupt();

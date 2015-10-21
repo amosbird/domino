@@ -75,16 +75,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
         if (result.isEmpty()) continue;
         return result;
       }
-    }
-    catch (TransactionOutOfDateException e) {
-      trx.disable();
-      throw new IOException(e);
-    }
-    catch (InvalidRowStatusException e) {
-      trx.disable();
-      throw new IOException(e);
-    }
-    catch (IOException e) {
+    } catch (IOException e) {
       trx.disable();
       throw e;
     }
@@ -112,16 +103,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
         result = scanner.next(targLength - temp.size());
       }
       return temp.toArray(new Result[temp.size()]);
-    }
-    catch (TransactionOutOfDateException e) {
-      trx.disable();
-      throw new IOException(e);
-    }
-    catch (InvalidRowStatusException e) {
-      trx.disable();
-      throw new IOException(e);
-    }
-    catch (IOException e) {
+    } catch (IOException e) {
       trx.disable();
       throw e;
     }
