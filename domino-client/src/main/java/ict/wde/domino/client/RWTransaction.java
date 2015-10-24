@@ -60,7 +60,7 @@ public class RWTransaction implements Transaction {
    * 
    */
   private static class Commit implements Iterable<Map.Entry<byte[], Boolean>> {
-    final NavigableMap<byte[], Boolean> puts = new TreeMap<byte[], Boolean>(
+    final NavigableMap<byte[], Boolean> puts = new TreeMap<>(
         Bytes.BYTES_COMPARATOR);
     final HTableInterface table;
 
@@ -79,102 +79,29 @@ public class RWTransaction implements Transaction {
 
   }
 
-  /**
-   * Reporter class to update the timestamp of this transaction periodically for
-   * client failure detection.
-   * 
-   * @author Zhen Zhao, ICT, CAS
-   * 
-   */
-  private class LivenessReporter extends Thread {
-
-    static final long INTERVAL = DominoConst.TRX_EXPIRED / 2;
-
-    LivenessReporter() {
-      super();
-      this.setDaemon(true);
-    }
-
-    @Override
-    public void run() {
-      while (readyToCommit) {
-        try {
-          Thread.sleep(INTERVAL);
-        }
-        catch (InterruptedException ie) {
-          break;
-        }
-        touch();
-      }
-    }
-  }
-
-  private LivenessReporter reporter = new LivenessReporter();
-
-  // private final TidClient tidClient;
-  private final HTableInterface metaTable;
   private final Configuration conf;
   private final long startId;
-  private final byte[] startIdBytes;
+  private final DominoIdIface tidClient;
   private long commitId;
-  private final Map<byte[], Commit> commits = new TreeMap<byte[], Commit>(
+  private final Map<byte[], Commit> commits = new TreeMap<>(
       Bytes.BYTES_COMPARATOR);
-  private final Map<byte[], HTableInterface> tables = new TreeMap<byte[], HTableInterface>(
+  private final Map<byte[], HTableInterface> tables = new TreeMap<>(
       Bytes.BYTES_COMPARATOR);
 
   private boolean readyToCommit = true;
-  private boolean clearTrasactionStatus = true;
 
   protected RWTransaction(Configuration conf, DominoIdIface tidClient)
       throws IOException {
-    // this.tidClient = tidClient;
     this.conf = conf;
-    this.metaTable = new HTable(conf, DominoConst.TRANSACTION_META);
-    Field f = null;
-    try {
-      f = metaTable.getClass().getDeclaredField("cleanupConnectionOnClose");
-      f.setAccessible(true);
-      f.set(metaTable, false);
-    } catch (Exception e) {
-      e.printStackTrace();
-    }
+    this.tidClient = tidClient;
     this.startId = tidClient.getId();
-    this.startIdBytes = DominoConst.long2TranscationRowKey(startId);
-    createTransactionMeta();
-    startReporter();
-  }
-
-  private void startReporter() {
-    reporter.start();
-  }
-
-  private void createTransactionMeta() throws IOException {
-    Put put = new Put(startIdBytes);
-    put.add(DominoConst.TRANSACTION_META_FAMILY,
-        DominoConst.TRANSACTION_STATUS, startId, DominoConst.TRX_ACTIVE_B);
-    put.add(DominoConst.TRANSACTION_META_FAMILY, DominoConst.TRANSACTION_TS,
-        startId, DominoConst.tsToBytes(System.currentTimeMillis()));
-    metaTable.put(put);
-    // metaTable.flushCommits();
-  }
-
-  private void touch() {
-    Put put = new Put(startIdBytes);
-    put.add(DominoConst.TRANSACTION_META_FAMILY, DominoConst.TRANSACTION_TS,
-        startId, DominoConst.tsToBytes(System.currentTimeMillis()));
-    try {
-      metaTable.put(put);
-    }
-    catch (IOException ioe) {
-      Log.warn("Error reporting liveness: {}", ioe.toString());
-    }
   }
 
   private HTableInterface getTable(byte[] name) throws IOException {
     HTableInterface table = tables.get(name);
     if (table == null) {
       table = new HTable(conf, name);
-      Field f = null;
+      Field f;
       try {
         f = table.getClass().getDeclaredField("cleanupConnectionOnClose");
         f.setAccessible(true);
@@ -194,11 +121,6 @@ public class RWTransaction implements Transaction {
       }
       catch (IOException ioe) {
       }
-    }
-    try {
-      this.metaTable.close();
-    }
-    catch (IOException ioe) {
     }
     tables.clear();
   }
@@ -240,7 +162,7 @@ public class RWTransaction implements Transaction {
     }
     scan.setTimeRange(0, startId + 1);
     scan.setMaxVersions();
-    return new DResultScanner(table.getScanner(scan), startId, metaTable,
+    return new DResultScanner(table.getScanner(scan), startId,
         table, this);
   }
 
@@ -318,20 +240,14 @@ public class RWTransaction implements Transaction {
   public void commit() throws IOException {
     checkIfReadyToContinue();
     getCommitId();
-    commitTransaction();
     commitPuts();
-    removeTransactionStatus();
     closeAllTables();
-    reporter.interrupt();
   }
 
   public void rollback() throws IOException {
     readyToCommit = false;
-    transactionMetaAbort();
     rollbackPuts();
-    removeTransactionStatus();
     closeAllTables();
-    reporter.interrupt();
   }
 
   private void rollbackPuts() {
@@ -343,25 +259,10 @@ public class RWTransaction implements Transaction {
           commit.table.coprocessorProxy(DominoIface.class, row).rollbackRow(
               row, startId);
         }
-        catch (Throwable t) {
-          // Wait for other threads to clean the status.
-          // So transaction metadata shouldn't be cleared.
-          clearTrasactionStatus = false;
+        catch (Exception e) {
+          e.printStackTrace();
         }
       }
-    }
-  }
-
-  private void transactionMetaAbort() throws IOException {
-    try {
-      metaTable.coprocessorProxy(TMetaIface.class, startIdBytes)
-          .abortTransaction(startIdBytes);
-    }
-    catch (IOException e) {
-      throw e;
-    }
-    catch (Throwable t) {
-      throw new IOException(t);
     }
   }
 
@@ -373,16 +274,6 @@ public class RWTransaction implements Transaction {
     if (!readyToCommit) {
       throw new IOException(
           "This Transaction has to be aborted because of some earlier failure.");
-    }
-  }
-
-  private void removeTransactionStatus() {
-    if (!clearTrasactionStatus) return;
-    Delete delete = new Delete(startIdBytes);
-    try {
-      metaTable.delete(delete);
-    }
-    catch (IOException e) {
     }
   }
 
@@ -404,9 +295,8 @@ public class RWTransaction implements Transaction {
           commit.table.coprocessorProxy(DominoIface.class, row).commitRow(row,
               startId, commitId, entry.getValue());
         }
-        catch (Throwable t) {
-          // Maybe print some log here. It doesn't matter when failed.
-          clearTrasactionStatus = false;
+        catch (Exception e) {
+          e.printStackTrace();
         }
       }
     }
@@ -414,27 +304,14 @@ public class RWTransaction implements Transaction {
 
   private void getCommitId() throws IOException {
     try {
-      long _commitId = metaTable.coprocessorProxy(TMetaIface.class,
-          startIdBytes).getCommitId(startIdBytes);
-      if (_commitId == DominoConst.ERR_TRX_ABORTED) {
-        throw new IOException("Transaction has been aborted.");
-      }
-      commitId = _commitId;
+      commitId = tidClient.getId();
     }
     catch (IOException e) {
       readyToCommit = false;
       throw e;
     }
-    catch (Throwable t) {
-      readyToCommit = false;
-      throw new IOException(t);
-    }
   }
 
-  private void commitTransaction() throws IOException {
-    metaTable.coprocessorProxy(TMetaIface.class,
-        startIdBytes).commitTransaction(startIdBytes, commitId);
-  }
   @Override
   public long getStartId() {
     return startId;

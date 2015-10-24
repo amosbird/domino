@@ -47,24 +47,14 @@ import org.apache.hadoop.hbase.util.Bytes;
 public class ReadOnlyTransaction implements Transaction {
 
   private boolean readyToContinue = true;
-  private final HTableInterface metaTable;
   private final Configuration conf;
   private final long startId;
-  private final Map<byte[], HTableInterface> tables = new TreeMap<byte[], HTableInterface>(
+  private final Map<byte[], HTableInterface> tables = new TreeMap<>(
       Bytes.BYTES_COMPARATOR);
 
   protected ReadOnlyTransaction(Configuration conf, DominoIdIface tidClient)
       throws IOException {
     this.conf = conf;
-    this.metaTable = new HTable(conf, DominoConst.TRANSACTION_META);
-    Field f = null;
-    try {
-      f = metaTable.getClass().getDeclaredField("cleanupConnectionOnClose");
-      f.setAccessible(true);
-      f.set(metaTable, false);
-    } catch (Exception e) {
-      e.printStackTrace();
-    }
     /*
      * Read-only transactions don't need to create transaction status rows in
      * meta table.
@@ -111,7 +101,7 @@ public class ReadOnlyTransaction implements Transaction {
     }
     scan.setTimeRange(0, startId + 1);
     scan.setMaxVersions();
-    return new DResultScanner(table.getScanner(scan), startId, metaTable,
+    return new DResultScanner(table.getScanner(scan), startId,
         table, this);
   }
 
@@ -119,7 +109,7 @@ public class ReadOnlyTransaction implements Transaction {
     HTableInterface table = tables.get(name);
     if (table == null) {
       table = new HTable(conf, name);
-      Field f = null;
+      Field f;
       try {
         f = table.getClass().getDeclaredField("cleanupConnectionOnClose");
         f.setAccessible(true);
@@ -139,11 +129,6 @@ public class ReadOnlyTransaction implements Transaction {
       }
       catch (IOException ioe) {
       }
-    }
-    try {
-      this.metaTable.close();
-    }
-    catch (IOException ioe) {
     }
     tables.clear();
   }

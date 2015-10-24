@@ -118,12 +118,11 @@ public class DominoEndpoint implements DominoIface, HTableWrapper {
         DominoConst.STATUS_COL);
     if (status == null || status.size() == 0) {
       Result ret = MVCC.handleResult(
-          this, getTrxMetaTable(), preRead, startId);
+          this, preRead, startId);
       return new DResult(ret, null);
     }
     try {
-      Result r = MVCC.handleResult(this, getTrxMetaTable(),
-              region.get(get), startId);
+      Result r = MVCC.handleResult(this, region.get(get), startId);
       return new DResult(r, null);
     }
     catch (TransactionOutOfDateException oode) {

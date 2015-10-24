@@ -46,15 +46,13 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
 
   final ResultScanner scanner;
   final long startId;
-  final HTableInterface metaTable;
   final HTableInterface table;
   final Transaction trx;
 
   protected DResultScanner(ResultScanner scanner, long startId,
-      HTableInterface metaTable, HTableInterface table, Transaction trx) {
+      HTableInterface table, Transaction trx) {
     this.scanner = scanner;
     this.startId = startId;
-    this.metaTable = metaTable;
     this.table = table;
     this.trx = trx;
   }
@@ -71,7 +69,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
       while (true) {
         Result result = scanner.next();
         if (result == null || result.isEmpty()) return result;
-        result = MVCC.handleResult(this, metaTable, result, startId);
+        result = MVCC.handleResult(this, result, startId);
         if (result.isEmpty()) continue;
         return result;
       }
@@ -91,7 +89,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
       int targLength = result.length;
       while (result != null && result.length > 0) {
         for (int i = 0; i < result.length; ++i) {
-          Result r = MVCC.handleResult(this, metaTable, result[i], startId);
+          Result r = MVCC.handleResult(this, result[i], startId);
           if (r == null || r.isEmpty()) {
             continue;
           }
@@ -129,7 +127,7 @@ public class DResultScanner implements ResultScanner, HTableWrapper {
       while (it.hasNext()) {
         try {
           trx.checkIfReadyToContinue();
-          next = MVCC.handleResult(DResultScanner.this, metaTable, it.next(),
+          next = MVCC.handleResult(DResultScanner.this, it.next(),
               startId);
           if (next == null || next.isEmpty()) continue;
           break;

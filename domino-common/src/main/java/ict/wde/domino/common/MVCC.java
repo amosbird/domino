@@ -19,6 +19,7 @@
 package ict.wde.domino.common;
 
 import java.io.IOException;
+import java.security.Key;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -64,8 +65,6 @@ public class MVCC {
    * 
    * @param tableWrapper
    *          DResultScanner(Client side) or DominoEndpoint(Server side)
-   * @param metaTable
-   *          Transaction meta table
    * @param result
    *          Result to be handled
    * @param startId
@@ -76,7 +75,7 @@ public class MVCC {
    * @throws InvalidRowStatusException
    */
   public static Result handleResult(HTableWrapper tableWrapper,
-      HTableInterface metaTable, Result result, long startId)
+                                    Result result, long startId)
       throws IOException {
     if (result.isEmpty()) return result;
     List<KeyValue> statusList = result.getColumn(DominoConst.INNER_FAMILY,
@@ -90,10 +89,11 @@ public class MVCC {
       }
       return tableWrapper.getTable().get(getQuery(result));
     }
-    List<KeyValue> committedList;
-    committedList = handleStatus(tableWrapper, metaTable, statusList,
-        result.getRow(), startId);
-    List<KeyValue> mergedList = mergeVersionedList(committedList, versionList);
+    // List<KeyValue> committedList;
+    // committedList = handleStatus(tableWrapper, metaTable, statusList,
+    //     result.getRow(), startId);
+    // List<KeyValue> mergedList = mergeVersionedList(committedList, versionList);
+    List<KeyValue> mergedList = versionList;
     List<KeyValue> retKV = new ArrayList<>();
     if (isDeletedRow(statusList, mergedList, startId)) {
       return new Result();
@@ -182,7 +182,7 @@ public class MVCC {
       // NULL if this transaction didn't update this row before.
       columnsWritten = DominoConst.getColumnsAt(res, startId);
       if (columnsWritten == null && status.size() >= DominoConst.MAX_VERSION) {
-        if (retried) {
+/*        if (retried) {
           throw new InvalidRowStatusException(String.format(
               "[%s][%s] Too many concurrent writes on this row.", new String(
                   tableWrapper.getName()), new String(row)));
@@ -190,20 +190,26 @@ public class MVCC {
         // Try to clean some committed/aborted status.
         retried = true;
         handleStatus(tableWrapper, metaTable, status, row, startId);
-        continue;
+        continue;*/
+        throw new InvalidRowStatusException(String.format(
+            "[%s][%s] Too many concurrent writes on this row.",
+            new String(tableWrapper.getName()), new String(row)));
       }
       if (locking && conflicted(status, startId)) {
-        if (retried) {
+/*        if (retried) {
           throw new InvalidRowStatusException(String.format(
               "[%s][%s] Row is in an update status.",
               new String(tableWrapper.getName()), new String(row)));
         }
         retried = true;
         handleStatus(tableWrapper, metaTable, status, row, startId);
-        continue;
+        continue;*/
+        throw new InvalidRowStatusException(String.format(
+            "[%s][%s] Row is in an update status.",
+            new String(tableWrapper.getName()), new String(row)));
       }
       Iterator<KeyValue> it = status.iterator();
-      try {
+/*      try {
         while (it.hasNext()) {
           if (conflicted(it.next(), startId)) {
             throw new InvalidRowStatusException(String.format(
@@ -219,6 +225,13 @@ public class MVCC {
         retried = true;
         handleStatus(tableWrapper, metaTable, status, row, startId);
         continue;
+      }*/
+      while (it.hasNext()) {
+        if (conflicted(it.next(), startId)) {
+          throw new InvalidRowStatusException(String.format(
+            "[%s][%s] Row is in a stateful update status.", new String(
+            tableWrapper.getName()), new String(row)));
+        }
       }
       break;
     }
@@ -321,19 +334,19 @@ public class MVCC {
         throw new InvalidRowStatusException("No transaction status found");
       }
       switch (DominoConst.transactionStatus(tStatus)) {
-      case DominoConst.TRX_ACTIVE:
-        // Expire issues are done by TMetaEndpoint
-        continue;
-      case DominoConst.TRX_ABORTED:
-        rollbackRow(tableWrapper, row, transactionId);
-        break;
-      case DominoConst.TRX_COMMITTED:
-        long commitId = DominoConst.commitId(tStatus);
-        if (commitId > startId) continue; // Ignore the "future" value.
-        committed.add(commitRow(tableWrapper, kv, transactionId, commitId));
-        break;
-      default:
-        throw new InvalidRowStatusException("Invalid transaction status");
+        case DominoConst.TRX_ACTIVE:
+          // Expire issues are done by TMetaEndpoint
+          continue;
+        case DominoConst.TRX_ABORTED:
+          rollbackRow(tableWrapper, row, transactionId);
+          break;
+        case DominoConst.TRX_COMMITTED:
+          long commitId = DominoConst.commitId(tStatus);
+          if (commitId > startId) continue; // Ignore the "future" value.
+          committed.add(commitRow(tableWrapper, kv, transactionId, commitId));
+          break;
+        default:
+          throw new InvalidRowStatusException("Invalid transaction status");
       }
     }
     return new ArrayList<>(committed);
